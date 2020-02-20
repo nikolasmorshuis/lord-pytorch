@@ -4,24 +4,18 @@ from torch import nn
 from torchvision import models
 
 
-class LordModel(nn.Module):
+class LordStage1(nn.Module):
 
-	def __init__(self, config):
+	def __init__(self, LordEmbeddings, LordModulation, LordGenerator):
 		super().__init__()
-
-		self.config = config
-
-		self.content_embedding = RegularizedEmbedding(config['n_imgs'], config['content_dim'], config['content_std'])
-		self.class_embedding = nn.Embedding(config['n_classes'], config['class_dim'])
-		self.modulation = Modulation(config['class_dim'], config['n_adain_layers'], config['adain_dim'])
-		self.generator = Generator(config['content_dim'], config['n_adain_layers'], config['adain_dim'], config['img_shape'])
+		self.embeddings = LordEmbeddings
+		self.modulation = LordModulation
+		self.generator = LordGenerator
 
 	def forward(self, img_id, class_id):
-		content_code = self.content_embedding(img_id)
-		class_code = self.class_embedding(class_id)
+		content_code, class_code = self.embeddings(img_id, class_id)
 		class_adain_params = self.modulation(class_code)
 		generated_img = self.generator(content_code, class_adain_params)
-
 		return generated_img, content_code, class_code
 
 	def init(self):
@@ -31,6 +25,163 @@ class LordModel(nn.Module):
 	def weights_init(m):
 		if isinstance(m, nn.Embedding):
 			nn.init.uniform_(m.weight, a=-0.05, b=0.05)
+
+
+class LordStage2(nn.Module):
+	def __init__(self, LordEncoders, LordModulation, LordGenerator):
+		super().__init__()
+		self.encoders = LordEncoders
+		self.modulation = LordModulation
+		self.generator = LordGenerator
+
+	def forward(self, img):
+		content_code, class_code = self.encoders(img)
+		class_adain_params = self.modulation(class_code)
+		generated_img = self.generator(content_code, class_adain_params)
+		return(generated_img, content_code, class_code)
+
+
+class LordEmbeddings(nn.Module):
+	def __init__(self, config):
+		super().__init__()
+		self.config = config
+		self.content_embedding = RegularizedEmbedding(config['n_imgs'], config['content_dim'], config['content_std'])
+		self.class_embedding = nn.Embedding(config['n_classes'], config['class_dim'])
+
+	def forward(self, img_id, class_id):
+		content_code = self.content_embedding(img_id)
+		class_code = self.class_embedding(class_id)
+		return content_code, class_code
+
+	def init(self):
+		self.apply(self.weights_init)
+
+	@staticmethod
+	def weights_init(m):
+		if isinstance(m, nn.Embedding):
+			nn.init.uniform_(m.weight, a=-0.05, b=0.05)
+
+
+class LordModulation(nn.Module):
+	def __init__(self, config):
+		super().__init__()
+		self.config = config
+		self.modulation = Modulation(config['class_dim'], config['n_adain_layers'], config['adain_dim'])
+
+	def forward(self, class_code):
+		class_adain_params = self.modulation(class_code)
+		return class_adain_params
+
+	def init(self):
+		self.apply(self.weights_init)
+
+	@staticmethod
+	def weights_init(m):
+		if isinstance(m, nn.Embedding):
+			nn.init.uniform_(m.weight, a=-0.05, b=0.05)
+
+
+class LordEncoders(nn.Module):
+	def __init__(self, config):
+		super().__init__()
+		self.content_encoder = ContentEncoder(config['img_shape'], config['content_dim'])
+		self.class_encoder = ClassEncoder(config['img_shape'], config['class_dim'])
+
+	def forward(self, img):
+		content_code = self.content_encoder(img)
+		class_code = self.class_encoder(img)
+		return content_code, class_code
+
+	def init(self):
+		self.apply(self.weights_init)
+
+	@staticmethod
+	def weights_init(m):
+		if isinstance(m, nn.Embedding):
+			nn.init.uniform_(m.weight, a=-0.05, b=0.05)
+
+
+class LordGenerator(nn.Module):
+	def __init__(self, config):
+		super().__init__()
+		self.generator = Generator(config['content_dim'], config['n_adain_layers'], config['adain_dim'], config['img_shape'])
+
+	def forward(self, content_code, class_adain_params):
+		generated_img = self.generator(content_code, class_adain_params)
+		return generated_img
+
+
+class ContentEncoder(nn.Module):
+	def __init__(self, img_shape, content_dim):
+		super(ContentEncoder, self).__init__()
+		self.img_shape = img_shape
+		self.content_dim = content_dim
+
+		self.encoder = nn.Sequential(
+			nn.Conv2d(self.img_shape[-1], 64, 7, 1, 3),
+			nn.LeakyReLU(),
+			nn.Conv2d(64, 128, 4, 2, 1),
+			nn.LeakyReLU(),
+			nn.Conv2d(128, 256, 4, 2, 1),
+			nn.LeakyReLU(),
+			nn.Conv2d(256, 256, 4, 2, 1),
+			nn.LeakyReLU(),
+			nn.Conv2d(256, 256, 4, 2, 1),
+			nn.LeakyReLU(),
+			
+			Flatten(),
+
+			nn.Linear(4096, 256),
+			nn.LeakyReLU(),
+			nn.Linear(256, 256),
+			nn.LeakyReLU(),
+
+			nn.Linear(256, self.content_dim)
+		)
+
+
+	def forward(self, x):
+		content_code = self.encoder(x)
+		return content_code
+
+
+class ClassEncoder(nn.Module):
+	def __init__(self, img_shape, class_dim):
+		super(ClassEncoder, self).__init__()
+		self.img_shape = img_shape
+		self.class_dim = class_dim
+
+		self.encoder = nn.Sequential(
+			nn.Conv2d(self.img_shape[-1], 64, 7, 1, 3),
+			nn.LeakyReLU(),
+			nn.Conv2d(64, 128, 4, 2, 1),
+			nn.LeakyReLU(),
+			nn.Conv2d(128, 256, 4, 2, 1),
+			nn.LeakyReLU(),
+			nn.Conv2d(256, 256, 4, 2, 1),
+			nn.LeakyReLU(),
+			nn.Conv2d(256, 256, 4, 2, 1),
+			nn.LeakyReLU(),
+
+			Flatten(),
+
+			nn.Linear(4096, 256),
+			nn.LeakyReLU(),
+			nn.Linear(256, 256),
+			nn.LeakyReLU(),
+
+			nn.Linear(256, self.class_dim)
+		)
+
+	def forward(self, x):
+		class_code = self.encoder(x)
+		return class_code
+
+
+class Flatten(torch.nn.Module):
+	def forward(self, x):
+		batch_size = x.shape[0]
+		return x.view(batch_size, -1)
 
 
 class RegularizedEmbedding(nn.Module):
@@ -175,6 +326,10 @@ class NetVGGFeatures(nn.Module):
 
 	def forward(self, x):
 		output = []
+		if x.size()[1] == 1:
+			x = x.repeat(1, 3, 1, 1)
+		else:
+			pass
 		for i in range(self.layer_ids[-1] + 1):
 			x = self.vggnet.features[i](x)
 

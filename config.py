@@ -21,5 +21,12 @@ base_config = dict(
 			latent=3e-3,
 			min=1e-5
 		)
+	),
+
+	train_encoders=dict(
+		batch_size=64,
+		n_epochs=200,
+		learning_rate=1e-4,
+		learning_rate_min=1e-5
 	)
 )
